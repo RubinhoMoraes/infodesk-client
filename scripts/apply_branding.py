@@ -193,6 +193,161 @@ def main() -> None:
         shutil.copy2(src, dst)
         print(f"OK [icon] {src.name} -> {dst}")
 
+    # 7. Supressao da janela flutuante --cm em sessoes headless autorizadas (Terminal / FileTransfer / PortForward)
+    main_dart = rd / "flutter" / "lib" / "main.dart"
+    replace_exact(
+        main_dart,
+        (
+            '  final hide = await bind.cmGetConfig(name: "hide_cm") == \'true\';\n'
+            '  gFFI.serverModel.hideCm = hide;\n'
+            '  if (hide) {\n'
+            '    await hideCmWindow(isStartup: true);\n'
+            '  } else {\n'
+            '    await showCmWindow(isStartup: true);\n'
+            '  }'
+        ),
+        (
+            '  final hide = await bind.cmGetConfig(name: "hide_cm") == \'true\';\n'
+            '  gFFI.serverModel.hideCm = hide;\n'
+            '  await hideCmWindow(isStartup: true);'
+        ),
+        "main.dart start cm hidden until non-headless session",
+    )
+    replace_exact(
+        main_dart,
+        (
+            '  } else if (_isCmReadyToShow) {\n'
+            '    if (await windowManager.getOpacity() != 1) {\n'
+            '      await windowManager.setOpacity(1);'
+        ),
+        (
+            '  } else if (_isCmReadyToShow) {\n'
+            '    if (await windowManager.getOpacity() != 1) {\n'
+            '      await windowManager.show();\n'
+            '      await windowManager.setOpacity(1);'
+        ),
+        "main.dart showCmWindow unhide when visible session arrives",
+    )
+
+    server_model_dart = rd / "flutter" / "lib" / "models" / "server_model.dart"
+    replace_exact(
+        server_model_dart,
+        "  bool hideCm = false;",
+        (
+            "  bool hideCm = false;\n\n"
+            "  bool get shouldHideCmNow {\n"
+            "    if (hideCm) return true;\n"
+            "    final active = _clients.where((c) => !c.disconnected).toList();\n"
+            "    if (active.isEmpty) return false;\n"
+            "    return active.every((c) =>\n"
+            "        c.authorized &&\n"
+            "        (c.isFileTransfer || c.isTerminal || c.portForward.isNotEmpty) &&\n"
+            "        !c.inVoiceCall &&\n"
+            "        !c.incomingVoiceCall);\n"
+            "  }"
+        ),
+        "server_model.dart shouldHideCmNow getter",
+    )
+    replace_exact(
+        server_model_dart,
+        (
+            "          if (_clients.isEmpty) {\n"
+            "            hideCmWindow();\n"
+            "            if (_zeroClientLengthCounter++ == 12) {\n"
+            "              // 6 second\n"
+            "              windowManager.close();\n"
+            "            }\n"
+            "          } else {\n"
+            "            _zeroClientLengthCounter = 0;\n"
+            "            if (!hideCm) showCmWindow();\n"
+            "          }"
+        ),
+        (
+            "          if (_clients.isEmpty) {\n"
+            "            hideCmWindow();\n"
+            "            if (_zeroClientLengthCounter++ == 12) {\n"
+            "              // 6 second\n"
+            "              windowManager.close();\n"
+            "            }\n"
+            "          } else if (shouldHideCmNow) {\n"
+            "            _zeroClientLengthCounter = 0;\n"
+            "            hideCmWindow();\n"
+            "          } else {\n"
+            "            _zeroClientLengthCounter = 0;\n"
+            "            showCmWindow();\n"
+            "          }"
+        ),
+        "server_model.dart timerCallback headless cm hide",
+    )
+    replace_exact(
+        server_model_dart,
+        (
+            "    if (desktopType == DesktopType.cm) {\n"
+            "      if (_clients.isEmpty) {\n"
+            "        hideCmWindow();\n"
+            "      } else if (!hideCm) {\n"
+            "        showCmWindow();\n"
+            "      }\n"
+            "    }"
+        ),
+        (
+            "    if (desktopType == DesktopType.cm) {\n"
+            "      if (_clients.isEmpty || shouldHideCmNow) {\n"
+            "        hideCmWindow();\n"
+            "      } else {\n"
+            "        showCmWindow();\n"
+            "      }\n"
+            "    }"
+        ),
+        "server_model.dart updateClientState headless cm hide",
+    )
+    replace_exact(
+        server_model_dart,
+        (
+            "      if (desktopType == DesktopType.cm && !hideCm) {\n"
+            "        showCmWindow();\n"
+            "      }"
+        ),
+        (
+            "      if (desktopType == DesktopType.cm) {\n"
+            "        if (shouldHideCmNow) {\n"
+            "          hideCmWindow();\n"
+            "        } else {\n"
+            "          showCmWindow();\n"
+            "        }\n"
+            "      }"
+        ),
+        "server_model.dart addConnection headless cm hide",
+    )
+    replace_exact(
+        server_model_dart,
+        (
+            "    Future.delayed(Duration.zero, () async {\n"
+            "      if (!hideCm) windowOnTop(null);\n"
+            "    });\n"
+            "    // Only do the hidden task when on Desktop.\n"
+            "    if (client.authorized && isDesktop) {\n"
+            "      cmHiddenTimer = Timer(const Duration(seconds: 3), () {\n"
+            "        if (!hideCm) windowManager.minimize();\n"
+            "        cmHiddenTimer = null;\n"
+            "      });\n"
+            "    }"
+        ),
+        (
+            "    Future.delayed(Duration.zero, () async {\n"
+            "      if (!shouldHideCmNow) windowOnTop(null);\n"
+            "    });\n"
+            "    // Only do the hidden task when on Desktop.\n"
+            "    if (client.authorized && isDesktop) {\n"
+            "      cmHiddenTimer = Timer(const Duration(seconds: 3), () {\n"
+            "        if (!shouldHideCmNow) windowManager.minimize();\n"
+            "        cmHiddenTimer = null;\n"
+            "      });\n"
+            "    }"
+        ),
+        "server_model.dart _addTab headless cm hide",
+    )
+
     print("Branding InfoDesk aplicado com sucesso.")
 
 
